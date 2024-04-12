@@ -23,6 +23,7 @@ typedef struct colored_text {
 
 typedef struct module {
 	char *name;
+	char *symbol;
 	module_output (*func)(struct module *);
 	bool display_by_default;
 } module;

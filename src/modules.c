@@ -327,9 +327,35 @@ char *parse_key_value_pair_list(char *key, char *data, size_t size) {
 	return NULL;
 }
 
+bool getenv_bool(const char *name) {
+	char *nerd = getenv(name);
+	if (!nerd) return false;
+	if (*nerd == '\0') return false;
+	else if (strcasecmp(nerd, "n") == 0)
+		return false;
+	else if (strcasecmp(nerd, "false") == 0)
+		return false;
+	else if (strcasecmp(nerd, "0") == 0)
+		return false;
+	else if (strcasecmp(nerd, "no") == 0)
+		return false;
+	return true;
+}
+
 static module_output line(char *string, bool free_string, module *module) {
 	if (!string) return NULL;
 	if (!module) return NULL;
+
+	static bool init_nerd = false;
+	static bool use_nerd;
+	if (!init_nerd) {
+		use_nerd = getenv_bool("FO_NERDFONTS");
+		char *term = getenv("TERM");
+		if (term && strcasecmp(term, "linux") == 0) use_nerd = false; // disable in tty
+	}
+
+	char *name = use_nerd ? module->symbol : module->name;
+	const size_t padded_len = use_nerd ? 4 : 9;
 
 	static int color = 0;
 	// rainbow gradient
@@ -343,10 +369,9 @@ static module_output line(char *string, bool free_string, module *module) {
 	}
 
 	size_t index = 0;
-	out[index++] = (struct colored_text){.string = module->name, .free = false, .fg_color = c, .flags = FLAG_FG_COLOR | FLAG_BOLD};
+	out[index++] = (struct colored_text){.string = name, .free = false, .fg_color = c, .flags = FLAG_FG_COLOR | FLAG_BOLD};
 
-	size_t name_len = strlen(module->name);
-	const size_t padded_len = 9;
+	size_t name_len = use_nerd ? 2 : strlen(module->name);
 	if (name_len < padded_len) {
 		// create spacing to pad module name to 9 chars
 		size_t spacing_size = padded_len - name_len;
@@ -630,19 +655,19 @@ module_output module_arch(module *mod) {
 }
 
 module *modules = (module[]){
-        {"username", module_username, false},
-        {"hostname", module_hostname, false},
-        {"header", module_header, true},
-        {"line", module_line, true},
-        {"os", module_os, true},
-        {"kernel", module_kernel, true},
-        {"uptime", module_uptime, true},
-        {"shell", module_shell, true},
-        {"ram", module_ram, true},
-        {"swap", module_swap, true},
-        {"de", module_de, true},
-        {"editor", module_editor, true},
-        {"host", module_host, true},
-        {"arch", module_arch, true},
+        {"username", "", module_username, false},
+        {"hostname", "󰛳", module_hostname, false},
+        {"header", NULL, module_header, true},
+        {"line", NULL, module_line, true},
+        {"os", "", module_os, true},
+        {"kernel", "", module_kernel, true},
+        {"uptime", "", module_uptime, true},
+        {"shell", "", module_shell, true},
+        {"ram", "󰍛", module_ram, true},
+        {"swap", "󰓡", module_swap, true},
+        {"de", "", module_de, true},
+        {"editor", "", module_editor, true},
+        {"host", "󰍹", module_host, true},
+        {"arch", "", module_arch, true},
         {0}
 };
