@@ -56,36 +56,40 @@ void print_output(module_output output, bool allow_color, FILE *fp) {
 	for (size_t i = 0; output[i].string; ++i) {
 		struct colored_text text = output[i];
 		char *str = text.string;
-		if (!str || !*str) break;
+		if (!str) break;
 
-		if (allow_color) {
-			if (HAS_FLAG(text.flags, FLAG_BOLD)) fputs("\x1b[1m", fp);
-			if (HAS_FLAG(text.flags, FLAG_ITALIC)) fputs("\x1b[3m", fp);
-			if (HAS_FLAG(text.flags, FLAG_UNDERLINE)) fputs("\x1b[4m", fp);
-			if (HAS_FLAG(text.flags, FLAG_STRIKETHROUGH)) fputs("\x1b[9m", fp);
-			if (HAS_FLAG(text.flags, FLAG_FG_COLOR)) {
-				fprintf(fp, "\x1b[38;5;%im", text.fg_color);
+		if (*str) {
+			if (allow_color) {
+				if (HAS_FLAG(text.flags, FLAG_BOLD)) fputs("\x1b[1m", fp);
+				if (HAS_FLAG(text.flags, FLAG_ITALIC)) fputs("\x1b[3m", fp);
+				if (HAS_FLAG(text.flags, FLAG_UNDERLINE)) fputs("\x1b[4m", fp);
+				if (HAS_FLAG(text.flags, FLAG_STRIKETHROUGH)) fputs("\x1b[9m", fp);
+				if (HAS_FLAG(text.flags, FLAG_FG_COLOR)) {
+					fprintf(fp, "\x1b[38;5;%im", text.fg_color);
+				}
+				if (HAS_FLAG(text.flags, FLAG_BG_COLOR)) {
+					fprintf(fp, "\x1b[48;5;%im", text.bg_color);
+				}
 			}
-			if (HAS_FLAG(text.flags, FLAG_BG_COLOR)) {
-				fprintf(fp, "\x1b[48;5;%im", text.bg_color);
+
+			// loop the new lines if we ever want to do something with them
+			char *newline;
+			while (str && *str) {
+				newline = strchr(str, '\n');
+				size_t len = newline - str;
+				if (!newline) len = strlen(str); // newline is NULL on last line, so print the rest of the string
+				fwrite(str, 1, len, fp);         // print the line
+				if (newline) {
+					print_newline();
+					str = newline + 1;
+				} else
+					break;
 			}
+			if (allow_color)
+				fprintf(fp, "\x1b[0m");
 		}
 
-		// loop the new lines if we ever want to do something with them
-		char *newline;
-		while (str && *str) {
-			newline = strchr(str, '\n');
-			size_t len = newline - str;
-			if (!newline) len = strlen(str); // newline is NULL on last line, so print the rest of the string
-			fwrite(str, 1, len, fp);         // print the line
-			if (newline) {
-				print_newline();
-				str = newline + 1;
-			} else
-				break;
-		}
-		if (allow_color)
-			fprintf(fp, "\x1b[0m");
+		if (text.free) free(text.string);
 	}
 
 	print_newline();
@@ -108,7 +112,10 @@ int main(int argc, char *argv[]) {
 			if (!m->display_by_default) continue;
 		}
 		module_output output = m->func(m);
-		print_output(output, true, stdout);
+		if (output) {
+			print_output(output, true, stdout);
+			free(output);
+		}
 	}
 	return 0;
 }

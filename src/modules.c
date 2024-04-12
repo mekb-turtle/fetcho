@@ -12,6 +12,15 @@
 
 #include "modules.h"
 
+/*
+static void *pending_free[16];
+static size_t pending_free_i = 0;
+void free_later(void *ptr) {
+	if (pending_free_i >= (sizeof(pending_free) / sizeof(pending_free[0]))) return;
+	pending_free[pending_free_i++]=ptr;
+}
+*/
+
 static struct utsname *get_utsname() {
 	static struct utsname *un;
 	static bool init = false;
@@ -62,7 +71,7 @@ enum format_bytes_mode { binary_i,
 static char *format_bytes(size_t byte, enum format_bytes_mode mode) {
 	const int scale = 2;
 
-	int scale_exp = 1;
+	size_t scale_exp = 1;
 	for (int i = 0; i < scale; ++i) scale_exp *= 10;
 
 	char *suffix = "";
@@ -89,8 +98,9 @@ static char *format_bytes(size_t byte, enum format_bytes_mode mode) {
 		power *= base;    // multiply power by the base so we can count the remainder
 	}
 
-	size_t remainder = byte - mantissa;
+	size_t remainder = byte - mantissa * power;
 	float fraction_part = (remainder * scale_exp) / (float) power / (float) scale_exp;
+	if (remainder == 0) fraction_part = 0; // prevent floating point weirdness
 
 	char *frac_str, *str;
 	if (!(frac_str = malloc(64))) {
@@ -111,7 +121,15 @@ static char *format_bytes(size_t byte, enum format_bytes_mode mode) {
 		return NULL;
 	}
 
-	char *frac_str_dp = strchrnul(frac_str, '.'); // find the decimal point, or {'\0'} if none found
+	char *frac_str_dp = strchrnul(frac_str, '.'); // find the decimal point, or "" if none found
+	if (strchr(frac_str, 'e')) {
+		// use "" if float uses scientific notation
+		frac_str_dp = frac_str + strlen(frac_str);
+	}
+	if (strlen(frac_str_dp) >= scale + 1) {
+		// trim string if it's too long
+		frac_str_dp[scale + 1] = '\0';
+	}
 
 	const char *suffixes = " kMGTPEZY";
 
@@ -309,7 +327,7 @@ char *parse_key_value_pair_list(char *key, char *data, size_t size) {
 	return NULL;
 }
 
-static module_output line(char *string, module *module) {
+static module_output line(char *string, bool free_string, module *module) {
 	if (!string) return NULL;
 	if (!module) return NULL;
 
@@ -325,12 +343,12 @@ static module_output line(char *string, module *module) {
 	}
 
 	size_t index = 0;
-	out[index++] = (struct colored_text){.string = module->name, .fg_color = c, .flags = FLAG_FG_COLOR | FLAG_BOLD};
+	out[index++] = (struct colored_text){.string = module->name, .free = false, .fg_color = c, .flags = FLAG_FG_COLOR | FLAG_BOLD};
 
 	size_t name_len = strlen(module->name);
-	const size_t padded_len = 7;
+	const size_t padded_len = 9;
 	if (name_len < padded_len) {
-		// create spacing to pad module name to 7 chars
+		// create spacing to pad module name to 9 chars
 		size_t spacing_size = padded_len - name_len;
 		char *spacing = malloc(spacing_size + 1);
 		if (!spacing) {
@@ -340,20 +358,20 @@ static module_output line(char *string, module *module) {
 		}
 		memset(spacing, ' ', spacing_size);
 		spacing[spacing_size] = '\0';
-		out[index++] = (struct colored_text){.string = spacing, .flags = 0};
+		out[index++] = (struct colored_text){.string = spacing, .free = true, .flags = 0};
 	}
 
-	out[index++] = (struct colored_text){.string = string, .flags = 0};
+	out[index++] = (struct colored_text){.string = string, .free = free_string, .flags = 0};
 	out[index++] = (struct colored_text){.string = NULL};
 	return out;
 }
 
 module_output module_hostname(module *mod) {
-	return line(get_hostname(), mod);
+	return line(get_hostname(), false, mod);
 }
 
 module_output module_username(module *mod) {
-	return line(get_username(), mod);
+	return line(get_username(), false, mod);
 }
 
 module_output module_header(module *mod) {
@@ -369,9 +387,9 @@ module_output module_header(module *mod) {
 	memcpy(
 	        out,
 	        (struct colored_text[]){
-	                {.string = user, .flags = FLAG_FG_COLOR | FLAG_BOLD, .fg_color = 5},
-	                {.string = "@", .flags = FLAG_FG_COLOR | FLAG_BOLD, .fg_color = 2},
-	                {.string = host, .flags = FLAG_FG_COLOR | FLAG_BOLD, .fg_color = 5},
+	                {.string = user, .free = false, .flags = FLAG_FG_COLOR | FLAG_BOLD, .fg_color = 5},
+	                {.string = "@", .free = false, .flags = FLAG_FG_COLOR | FLAG_BOLD, .fg_color = 2},
+	                {.string = host, .free = false, .flags = FLAG_FG_COLOR | FLAG_BOLD, .fg_color = 5},
 	                {.string = NULL}
     },
 	        4 * sizeof(struct colored_text));
@@ -407,7 +425,7 @@ module_output module_line(module *mod) {
 	memcpy(
 	        out,
 	        (struct colored_text[]){
-	                {.string = str, .flags = FLAG_BOLD},
+	                {.string = str, .free = true, .flags = FLAG_BOLD},
 	                {.string = NULL}
     },
 	        2 * sizeof(struct colored_text));
@@ -427,7 +445,9 @@ module_output module_os(module *mod) {
 	if (!name) name = parse_key_value_pair_list("NAME", data, size);
 	if (!name) name = parse_key_value_pair_list("ID", data, size);
 
-	return line(name, mod);
+	free(data);
+
+	return line(name, true, mod);
 }
 
 module_output module_kernel(module *mod) {
@@ -448,36 +468,35 @@ module_output module_kernel(module *mod) {
 		return NULL;
 	}
 
-	return line(out, mod);
+	return line(out, true, mod);
 }
 
 module_output module_uptime(module *mod) {
 	struct sysinfo *si = get_sysinfo();
 	if (!si) return NULL;
 
-	return line(format_time(si->uptime), mod);
+	return line(format_time(si->uptime), true, mod);
 }
 
 module_output module_shell(module *mod) {
 	struct passwd *passwd = get_passwd();
 	if (!passwd) return NULL;
 
-	return line(get_basename(passwd->pw_shell), mod);
+	return line(get_basename(passwd->pw_shell), false, mod);
 }
 
 const enum format_bytes_mode bytes_mode = binary_i;
 
-module_output module_ram(module *mod) {
-	// get total and used ram with procps
-	meminfo();
-
-	char *used_str = format_bytes(kb_main_used * 1024, bytes_mode); // TODO: fix to show proper used memory
-	char *total_str = format_bytes(kb_main_total * 1024, bytes_mode);
+module_output module_byte_display(size_t used, size_t total, module *mod) {
+	char *used_str = format_bytes(used, bytes_mode);
+	char *total_str = format_bytes(total, bytes_mode);
 
 	size_t str_len = strlen(used_str) + strlen(total_str) + 4;
 	char *str = malloc(str_len);
 	if (!str) {
 		warn("malloc");
+		free(used_str);
+		free(total_str);
 		return NULL;
 	}
 	if (snprintf(str, str_len, "%s / %s", used_str, total_str) < 0) {
@@ -491,29 +510,17 @@ module_output module_ram(module *mod) {
 	free(used_str);
 	free(total_str);
 
-	return line(str, mod);
+	return line(str, true, mod);
+}
+
+module_output module_ram(module *mod) {
+	meminfo(); // procps
+	return module_byte_display(kb_main_used * 1024, kb_main_total * 1024, mod);
 }
 
 module_output module_swap(module *mod) {
-	// get total and used swap with procps
-	meminfo();
-
-	char *used_str = format_bytes(kb_swap_used, bytes_mode); // TODO: fix to show proper used memory
-	char *total_str = format_bytes(kb_swap_total, bytes_mode);
-
-	size_t str_len = strlen(used_str) + strlen(total_str) + 4;
-	char *str = malloc(str_len);
-	if (!str) {
-		warn("malloc");
-		return NULL;
-	}
-	if (snprintf(str, str_len, "%s / %s", used_str, total_str) < 0) {
-		warnx("snprintf");
-		free(str);
-		return NULL;
-	}
-
-	return line(str, mod);
+	meminfo(); // procps
+	return module_byte_display(kb_swap_used * 1024, kb_swap_total * 1024, mod);
 }
 
 module_output module_de(module *mod) {
@@ -572,7 +579,7 @@ module_output module_de(module *mod) {
 		result = getenv("DESKTOP_SESSION");
 
 	if (!result) return NULL;
-	return line(result, mod);
+	return line(result, false, mod);
 }
 
 module_output module_editor(module *mod) {
@@ -583,7 +590,7 @@ module_output module_editor(module *mod) {
 
 	if (strcmp(editor, "nvim") == 0) editor = "neovim";
 
-	return line(editor, mod);
+	return line(editor, false, mod);
 }
 
 module_output module_host(module *mod) {
@@ -610,13 +617,16 @@ module_output module_host(module *mod) {
 	memcpy(str + size1 + 1, data2, size2);
 	str[size1 + size2 + 1] = '\0';
 
-	return line(str, mod);
+	free(data1);
+	free(data2);
+
+	return line(str, true, mod);
 }
 
 module_output module_arch(module *mod) {
 	struct utsname *un = get_utsname();
 	if (!un) return NULL;
-	return line(un->machine, mod);
+	return line(un->machine, false, mod);
 }
 
 module *modules = (module[]){

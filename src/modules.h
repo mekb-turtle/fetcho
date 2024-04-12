@@ -6,6 +6,7 @@
 
 typedef struct colored_text {
 	char *string;
+	bool free;
 	uint8_t fg_color;
 	uint8_t bg_color;
 	uint8_t flags;
